@@ -49,7 +49,7 @@ To install FFmpeg locally for this project, either click **Install FFmpeg** in t
 .\scripts\install_ffmpeg.ps1
 ```
 
-Both options download a Windows FFmpeg release archive and extract only `ffmpeg.exe` and `ffprobe.exe` into the ignored local folder `tools\ffmpeg\`.
+Both options download a Windows FFmpeg release archive and extract only `ffmpeg.exe` and `ffprobe.exe` into the ignored local folder `tools\ffmpeg\`. The in-app installer shows live download progress when the server reports the archive size.
 
 You can also install FFmpeg globally and make it available through your system `PATH` if you prefer. ZDBatcher checks local `tools\ffmpeg\` first, then falls back to `PATH`.
 

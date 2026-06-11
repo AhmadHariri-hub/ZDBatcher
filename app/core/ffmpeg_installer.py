@@ -1,8 +1,11 @@
 import shutil
+import stat
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -16,7 +19,16 @@ class FfmpegInstallError(RuntimeError):
     pass
 
 
-ProgressCallback = Callable[[str], None]
+@dataclass(frozen=True)
+class InstallProgress:
+    message: str
+    percent: int | None = None
+    downloaded_bytes: int = 0
+    total_bytes: int | None = None
+    indeterminate: bool = True
+
+
+ProgressCallback = Callable[[InstallProgress], None]
 
 
 def install_ffmpeg(progress: ProgressCallback | None = None) -> tuple[Path, Path]:
@@ -31,6 +43,7 @@ def install_ffmpeg(progress: ProgressCallback | None = None) -> tuple[Path, Path
     temp_dir = Path(tempfile.mkdtemp(prefix="zdbatcher-ffmpeg-"))
     archive_path = temp_dir / "ffmpeg-release-essentials.zip"
     partial_path = archive_path.with_suffix(".zip.download")
+    installed_paths = None
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -43,14 +56,13 @@ def install_ffmpeg(progress: ProgressCallback | None = None) -> tuple[Path, Path
         if not ffprobe_path.is_file():
             raise FfmpegInstallError("ffprobe.exe was not installed.")
 
-        _emit(progress, "FFmpeg installed successfully.")
-        return ffmpeg_path, ffprobe_path
+        installed_paths = (ffmpeg_path, ffprobe_path)
     except FfmpegInstallError:
         raise
     except urllib.error.URLError as exc:
-        raise FfmpegInstallError("Could not download FFmpeg. Check your internet connection and try again.") from exc
+        raise FfmpegInstallError("FFmpeg install failed: network error or download interrupted.") from exc
     except TimeoutError as exc:
-        raise FfmpegInstallError("The FFmpeg download timed out. Try again with a stronger connection.") from exc
+        raise FfmpegInstallError("FFmpeg install failed: the download timed out.") from exc
     except zipfile.BadZipFile as exc:
         raise FfmpegInstallError("The downloaded FFmpeg archive could not be opened. Please try again.") from exc
     except PermissionError as exc:
@@ -64,7 +76,11 @@ def install_ffmpeg(progress: ProgressCallback | None = None) -> tuple[Path, Path
         except OSError:
             pass
 
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        _emit(progress, "Cleaning temporary files...")
+        _cleanup_temp_dir(temp_dir)
+
+    _emit(progress, "FFmpeg installed successfully.", percent=100, indeterminate=False)
+    return installed_paths
 
 
 def _target_dir() -> Path:
@@ -81,12 +97,41 @@ def _download_archive(partial_path: Path, archive_path: Path, progress: Progress
 
     try:
         with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+            total_bytes = _content_length(response)
+            downloaded_bytes = 0
+            last_percent = -1
+            last_mb = -1
+
             with partial_path.open("wb") as output:
                 while True:
                     chunk = response.read(DOWNLOAD_CHUNK_SIZE)
                     if not chunk:
                         break
                     output.write(chunk)
+                    downloaded_bytes += len(chunk)
+                    percent = None
+
+                    if total_bytes:
+                        percent = min(100, int(downloaded_bytes * 100 / total_bytes))
+                        if percent == last_percent:
+                            continue
+
+                        last_percent = percent
+                    else:
+                        downloaded_mb = downloaded_bytes // (1024 * 1024)
+                        if downloaded_mb == last_mb:
+                            continue
+
+                        last_mb = downloaded_mb
+
+                    _emit(
+                        progress,
+                        "Downloading FFmpeg",
+                        percent=percent,
+                        downloaded_bytes=downloaded_bytes,
+                        total_bytes=total_bytes,
+                        indeterminate=total_bytes is None,
+                    )
     except TimeoutError:
         raise
     except urllib.error.URLError:
@@ -95,6 +140,7 @@ def _download_archive(partial_path: Path, archive_path: Path, progress: Progress
     if not partial_path.is_file():
         raise FfmpegInstallError("The FFmpeg download did not create an archive file.")
 
+    _emit(progress, "Download complete. Extracting FFmpeg...", percent=100, indeterminate=False)
     partial_path.replace(archive_path)
 
 
@@ -105,7 +151,7 @@ def _extract_tools(
     ffprobe_path: Path,
     progress: ProgressCallback | None,
 ):
-    _emit(progress, "Extracting ffmpeg.exe and ffprobe.exe...")
+    _emit(progress, "Installing ffmpeg.exe and ffprobe.exe...", percent=100, indeterminate=False)
 
     with zipfile.ZipFile(archive_path) as archive:
         _extract_one(archive, "ffmpeg.exe", temp_dir, ffmpeg_path)
@@ -135,6 +181,60 @@ def _find_archive_member(archive: zipfile.ZipFile, executable_name: str) -> str 
     return None
 
 
-def _emit(progress: ProgressCallback | None, message: str):
+def _content_length(response) -> int | None:
+    value = response.headers.get("Content-Length")
+
+    if not value:
+        return None
+
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+
+    return parsed if parsed > 0 else None
+
+
+def _cleanup_temp_dir(temp_dir: Path):
+    for _attempt in range(5):
+        try:
+            shutil.rmtree(temp_dir, onerror=_make_writable)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            time.sleep(0.2)
+        except OSError:
+            time.sleep(0.2)
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _make_writable(function, path, _exc_info):
+    try:
+        Path(path).chmod(stat.S_IWRITE)
+    except OSError:
+        pass
+
+    function(path)
+
+
+def _emit(
+    progress: ProgressCallback | None,
+    message: str,
+    *,
+    percent: int | None = None,
+    downloaded_bytes: int = 0,
+    total_bytes: int | None = None,
+    indeterminate: bool = True,
+):
     if progress:
-        progress(message)
+        progress(
+            InstallProgress(
+                message=message,
+                percent=percent,
+                downloaded_bytes=downloaded_bytes,
+                total_bytes=total_bytes,
+                indeterminate=indeterminate,
+            )
+        )

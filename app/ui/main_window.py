@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 import app.config as app_config
 from app.config import APP_NAME
-from app.core.ffmpeg_installer import FFMPEG_ARCHIVE_URL, FfmpegInstallError, install_ffmpeg
+from app.core.ffmpeg_installer import FFMPEG_ARCHIVE_URL, FfmpegInstallError, InstallProgress, install_ffmpeg
 from app.core.media_engine import find_ffmpeg, find_ffprobe
 from app.ui.qt_pages import (
     AudioConverterPage,
@@ -38,7 +38,7 @@ from app.ui.qt_widgets import SupportDialog, ask_confirm, make_button, make_labe
 
 
 class FfmpegInstallThread(QThread):
-    progress = Signal(str)
+    progress = Signal(object)
     succeeded = Signal(str, str)
     failed = Signal(str)
 
@@ -134,6 +134,11 @@ class MainWindow(QMainWindow):
         self.ffmpeg_status = make_label("FFmpeg required", muted=True)
         set_role(self.ffmpeg_status, sidebarFooter=True)
         footer_layout.addWidget(self.ffmpeg_status)
+
+        self.ffmpeg_progress_label = make_label("", muted=True)
+        set_role(self.ffmpeg_progress_label, sidebarFooter=True)
+        self.ffmpeg_progress_label.hide()
+        footer_layout.addWidget(self.ffmpeg_progress_label)
 
         self.ffmpeg_install_button = make_button("Install FFmpeg", "primary")
         self.ffmpeg_install_button.clicked.connect(self._confirm_ffmpeg_install)
@@ -247,10 +252,12 @@ class MainWindow(QMainWindow):
 
         if self._has_ffmpeg():
             self.ffmpeg_status.setText("FFmpeg active")
+            self.ffmpeg_progress_label.hide()
             self.ffmpeg_install_button.hide()
             self.ffmpeg_progress.hide()
         else:
             self.ffmpeg_status.setText("FFmpeg required")
+            self.ffmpeg_progress_label.hide()
             self.ffmpeg_install_button.show()
             self.ffmpeg_install_button.setEnabled(True)
             self.ffmpeg_progress.hide()
@@ -270,8 +277,11 @@ class MainWindow(QMainWindow):
             self._start_ffmpeg_install()
 
     def _start_ffmpeg_install(self):
-        self.ffmpeg_status.setText("Downloading FFmpeg...")
+        self.ffmpeg_status.setText("Installing FFmpeg...")
+        self.ffmpeg_progress_label.setText("Starting FFmpeg installer...")
+        self.ffmpeg_progress_label.show()
         self.ffmpeg_install_button.setEnabled(False)
+        self.ffmpeg_progress.setRange(0, 0)
         self.ffmpeg_progress.show()
 
         thread = FfmpegInstallThread(self)
@@ -282,12 +292,21 @@ class MainWindow(QMainWindow):
         self.ffmpeg_install_thread = thread
         thread.start()
 
-    def _on_ffmpeg_install_progress(self, message: str):
-        self.ffmpeg_status.setText(message)
+    def _on_ffmpeg_install_progress(self, progress: InstallProgress):
+        self.ffmpeg_status.setText(progress.message)
+        self.ffmpeg_progress_label.setText(self._format_ffmpeg_progress(progress))
+        self.ffmpeg_progress_label.show()
+
+        if progress.percent is None or progress.indeterminate:
+            self.ffmpeg_progress.setRange(0, 0)
+        else:
+            self.ffmpeg_progress.setRange(0, 100)
+            self.ffmpeg_progress.setValue(max(0, min(100, progress.percent)))
 
     def _on_ffmpeg_install_success(self, ffmpeg_path: str, ffprobe_path: str):
         if self._has_ffmpeg():
             self.ffmpeg_status.setText("FFmpeg active")
+            self.ffmpeg_progress_label.setText("FFmpeg installed successfully.")
             self.ffmpeg_install_button.hide()
             show_message(
                 self,
@@ -302,6 +321,8 @@ class MainWindow(QMainWindow):
 
     def _on_ffmpeg_install_failure(self, message: str):
         self.ffmpeg_status.setText("FFmpeg required")
+        self.ffmpeg_progress_label.setText(message)
+        self.ffmpeg_progress_label.show()
         self.ffmpeg_install_button.show()
         self.ffmpeg_install_button.setEnabled(True)
         show_message(
@@ -318,6 +339,21 @@ class MainWindow(QMainWindow):
             self.ffmpeg_install_thread = None
         self.ffmpeg_progress.hide()
         self._refresh_ffmpeg_footer()
+
+    def _format_ffmpeg_progress(self, progress: InstallProgress) -> str:
+        if progress.downloaded_bytes and progress.total_bytes and progress.percent is not None:
+            return (
+                f"Downloading FFmpeg: {progress.percent}% - "
+                f"{self._format_mb(progress.downloaded_bytes)} / {self._format_mb(progress.total_bytes)}"
+            )
+
+        if progress.downloaded_bytes:
+            return f"Downloading FFmpeg: {self._format_mb(progress.downloaded_bytes)} downloaded"
+
+        return progress.message
+
+    def _format_mb(self, byte_count: int) -> str:
+        return f"{byte_count / 1_000_000:.1f} MB"
 
     def _refresh_page_ffmpeg_labels(self):
         active = self._has_ffmpeg()
