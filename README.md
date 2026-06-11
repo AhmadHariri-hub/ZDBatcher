@@ -8,9 +8,9 @@ ZDBatcher is a Windows desktop batch media automation tool for repetitive image,
 
 ## Status
 
-Active prototype / portfolio version.
+Usable. Core workflows are stable. A few edge cases are still being ironed out; see Known Limitations.
 
-This project is built as a practical Windows desktop utility and a public portfolio project. It is usable for common batch workflows, but it should not be treated as production-ready software yet.
+This project is built as a practical Windows desktop utility and a public portfolio project.
 
 ## Features
 
@@ -117,12 +117,9 @@ README.md               Project overview and setup guide
 
 ## Known Limitations
 
-- Active prototype / portfolio version, not a polished production release
 - Built and tested primarily on Windows
-- FFmpeg-dependent workflows require either local FFmpeg or FFmpeg on `PATH`
+- Video, audio, and mixed media workflows require either local FFmpeg or FFmpeg on `PATH`
 - Watch-folder automation should be used carefully because it processes files automatically
-- Packaging and installer polish are still evolving
-- Some edge cases around unusual media files may need additional handling
 
 ## Planned Improvements
 
